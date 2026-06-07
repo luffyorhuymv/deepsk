@@ -1,0 +1,55 @@
+services:
+  deepseek-proxy:
+    build: .
+    container_name: deepseek-proxy
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    environment:
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./api_keys.json:/app/api_keys.json
+    networks:
+      - deepseek-net
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: open-webui
+    restart: unless-stopped
+    depends_on:
+      deepseek-proxy:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      - OPENAI_API_BASE_URL=http://deepseek-proxy:5000/v1
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-sk-no-auth-needed}
+      - WEBUI_AUTH=${WEBUI_AUTH:-true}
+      - WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY:-}
+    volumes:
+      - open-webui-data:/app/backend/data
+    networks:
+      - deepseek-net
+
+  cloudflare-tunnel:
+    image: cloudflare/cloudflared:latest
+    container_name: cloudflare-tunnel
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
+    depends_on:
+      - deepseek-proxy
+      - open-webui
+    networks:
+      - deepseek-net
+
+networks:
+  deepseek-net:
+    driver: bridge
+
+volumes:
+  open-webui-data:

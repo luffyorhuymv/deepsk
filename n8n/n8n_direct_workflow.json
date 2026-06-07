@@ -1,0 +1,96 @@
+{
+  "name": "DeepSeek Direct API",
+  "nodes": [
+    {
+      "parameters": {},
+      "name": "Start",
+      "type": "n8n-nodes-base.start",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "requestMethod": "GET",
+        "url": "https://asmodeus.free.nf/",
+        "options": {}
+      },
+      "name": "Get Challenge",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse challenge from HTML\nconst html = $input.first().json.data;\n\n// Extract hex values from toNumbers(\"...\")\nconst regex = /toNumbers\\(\"([a-f0-9]+)\\\"\\)/g;\nconst matches = [...html.matchAll(regex)];\n\nif (matches.length < 3) {\n  throw new Error('Could not find challenge data');\n}\n\nreturn {\n  key: matches[0][1],\n  iv: matches[1][1],\n  data: matches[2][1]\n};"
+      },
+      "name": "Parse Challenge",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// AES Decryption function\nconst crypto = require('crypto');\n\nconst input = $input.first().json;\n\n// Convert hex to buffer\nconst key = Buffer.from(input.key, 'hex');\nconst iv = Buffer.from(input.iv, 'hex');\nconst encrypted = Buffer.from(input.data, 'hex');\n\n// AES-CBC Decrypt\nconst decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);\nlet decrypted = decipher.update(encrypted);\ndecrypted = Buffer.concat([decrypted, decipher.final()]);\n\n// Convert to hex for cookie\nconst cookieValue = decrypted.toString('hex');\n\nreturn {\n  cookie: cookieValue\n};"
+      },
+      "name": "Decrypt AES",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "requestMethod": "POST",
+        "url": "https://asmodeus.free.nf/deepseek.php?i=1",
+        "options": {
+          "headers": {
+            "Cookie": "={{ '\\_\\_test=' + $json.cookie }}"
+          }
+        },
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "model",
+              "value": "={{ $items('Start')[0].json.model || 'DeepSeek-V3' }}"
+            },
+            {
+              "name": "question",
+              "value": "={{ $items('Start')[0].json.message }}"
+            }
+          ]
+        },
+        "contentType": "multipart-form-data"
+      },
+      "name": "Chat API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [1050, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const html = $input.first().json.data;\n\n// Extract response from HTML\nconst match = html.match(/<div class=\"response-content\">(.*?)<\\/div>/s);\n\nreturn {\n  response: match ? match[1].trim() : 'No response found',\n  raw_html: html\n};"
+      },
+      "name": "Parse Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [1250, 300]
+    }
+  ],
+  "connections": {
+    "Start": {
+      "main": [[{"node": "Get Challenge", "type": "main", "index": 0}]]
+    },
+    "Get Challenge": {
+      "main": [[{"node": "Parse Challenge", "type": "main", "index": 0}]]
+    },
+    "Parse Challenge": {
+      "main": [[{"node": "Decrypt AES", "type": "main", "index": 0}]]
+    },
+    "Decrypt AES": {
+      "main": [[{"node": "Chat API", "type": "main", "index": 0}]]
+    },
+    "Chat API": {
+      "main": [[{"node": "Parse Response", "type": "main", "index": 0}]]
+    }
+  },
+  "settings": {}
+}
