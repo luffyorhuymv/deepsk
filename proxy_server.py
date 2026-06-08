@@ -3,7 +3,7 @@ DeepSeek API Proxy Server
 Expose API qua HTTP để gọi từ xa
 """
 
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
 from deepseek_api_client import DeepSeekClient
 from functools import wraps
@@ -169,8 +169,7 @@ def v1_chat_completions():
         
         # Kiểm tra model hợp lệ (nếu client có danh sách hỗ trợ)
         if hasattr(client, 'MODELS') and model not in client.MODELS:
-            # Fallback về default nếu model lạ (tránh lỗi khi người dùng dùng model từ config app khác)
-            model = 'DeepSeek-V3'
+            return jsonify({"error": f"Unknown model: {model}", "available": client.MODELS}), 400
             
         # Lấy message cuối cùng làm nội dung câu hỏi
         if not messages:
@@ -180,11 +179,11 @@ def v1_chat_completions():
         user_message = ""
         for msg in reversed(messages):
             if msg.get('role') == 'user':
-                user_message = msg.get('content', '')
+                user_message = normalize_openai_content(msg.get('content', ''))
                 break
         
         if not user_message:
-            user_message = messages[-1].get('content', '')
+            user_message = normalize_openai_content(messages[-1].get('content', ''))
 
         if not user_message:
             return jsonify({"error": "No content found in messages"}), 400
@@ -194,11 +193,38 @@ def v1_chat_completions():
             
         if response_text is None:
             return jsonify({"error": "Failed to get response from API"}), 500
-            
+        
         # Format response chuẩn OpenAI
         completion_id = f"chatcmpl-{uuid.uuid4()}"
         created_time = int(time.time())
         
+        # Streaming SSE response
+        if data.get('stream'):
+            def generate():
+                chunk = {
+                    "id": completion_id,
+                    "object": "chat.completion.chunk",
+                    "created": created_time,
+                    "model": model,
+                    "choices": [{
+                        "index": 0,
+                        "delta": {"role": "assistant", "content": response_text},
+                        "finish_reason": None
+                    }]
+                }
+                yield "data: " + json.dumps(chunk, ensure_ascii=False) + "\n\n"
+                done = {
+                    "id": completion_id,
+                    "object": "chat.completion.chunk",
+                    "created": created_time,
+                    "model": model,
+                    "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]
+                }
+                yield "data: " + json.dumps(done, ensure_ascii=False) + "\n\n"
+                yield "data: [DONE]\n\n"
+            return Response(generate(), mimetype='text/event-stream')
+        
+        # Non-streaming response
         return jsonify({
             "id": completion_id,
             "object": "chat.completion",
